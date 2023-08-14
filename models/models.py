@@ -57,3 +57,28 @@ def create_german_sentiment_bert():
 
     App = DnnApp('german-sentiment-bert', 'gsb', predictor=predictor)
     return App.instantiate(tokenizer, embLayer, networkLayers, outputBlock, 768, 768)
+
+
+
+"""
+"oliverguhr/german-sentiment-bert" is a pre-trained language model based on the BERT architecture, specifically trained
+ for sentiment analysis on German language text. It is a fine-tuned version of the original BERT model, which was 
+ pre-trained on a large corpus of text data.
+"""
+def create_farsi_sentiment_bert():
+    tokenizer = AutoTokenizer.from_pretrained("HooshvareLab/bert-fa-base-uncased-sentiment-snappfood")
+    model = AutoModelForSequenceClassification.from_pretrained("HooshvareLab/bert-fa-base-uncased-sentiment-snappfood")
+
+    for param in model.parameters():
+        param.requires_grad = False
+
+    embLayer = model.bert.embeddings
+    networkLayers = model.bert.encoder.layer
+    outputBlock = [model.bert.pooler, model.classifier, torch.nn.Softmax(dim=1)]
+
+    def predictor(scores):
+        labels = ['HAPPY', 'SAD']
+        return labels[torch.argmax(scores)]
+
+    App = DnnApp('bert-fa-base-uncased-sentiment', 'fsb', predictor=predictor)
+    return App.instantiate(tokenizer, embLayer, networkLayers, outputBlock, 768, 768)

@@ -97,7 +97,7 @@ def collect_new_path_nodes_single_path(inputNode, idOutBranch, idInBranch):
 
 
 def create_new_path(name, App, idOutBranch1, idInBranch1, App2=None, idInBranch2=None,
-                    idOutBranch2=None):
+                    idOutBranch2=None, forward=None, forward_backUp=None):
 
     inputNode1 = App.get_input_node()
 
@@ -109,6 +109,6 @@ def create_new_path(name, App, idOutBranch1, idInBranch1, App2=None, idInBranch2
         pathNodes = collect_new_path_nodes_single_path(inputNode1, idOutBranch1, idInBranch1)
 
 
-    path = Path(name, App.name, pathNodes)
+    path = Path(name, App.name, pathNodes, forward=forward, forward_backup=forward_backUp)
 
     return path

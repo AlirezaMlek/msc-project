@@ -22,7 +22,7 @@ class AppTests(unittest.TestCase):
         cls = App2.predictor(res)
         self.assertEqual(cls, 'positive') # add assertion here
 
-        token = tokenize('Mit keinem guten Ergebniss. [SEP]', tokenizer)
+        token = tokenize('die bahn ist auch nicht das was sie mal war..... [SEP]', tokenizer)
         res = path2.forward_backup(token)
         cls = App2.predictor(res)
         self.assertEqual(cls, 'negative') # add assertion here

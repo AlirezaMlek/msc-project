@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 from utils.BlockNode import *
-import transformers
 import os
 
 
@@ -33,7 +32,7 @@ class Path(nn.Module):
 
     App = {}
 
-    def __init__(self, name, app, nodes):
+    def __init__(self, name, app, nodes, forward=None, forward_backup=None, forward_label=None):
         super(Path, self).__init__()
         self.app = app
         self.name = name
@@ -43,66 +42,17 @@ class Path(nn.Module):
         self.load_fcs()
         self.layers = nn.ModuleList()
         self.fc_layers = []
+        self.forward_label = forward_label
+        self.forward_fn = forward
+        self.forward_backup_fn = forward_backup
 
     def forward(self, inputs):
-
-        attention_mask = torch.unsqueeze(inputs['attention_mask'], 3)
-
-        x = self.layers[0](inputs['input_ids'], token_type_ids=inputs['token_type_ids'])
-        x = torch.squeeze(x, dim=1)
-
-        for layer in self.layers[1:]:
-            if isinstance(layer, transformers.BertLayer):
-                x = layer(x[0] if isinstance(x, tuple) else x, attention_mask=attention_mask)
-            else:
-                x = layer(x[0] if isinstance(x, tuple) else x)
-
-        return x
+        return self.forward_fn(inputs, self.layers)
 
 
     def forward_backup(self, inputs):
-        currentNode = self.App[self.app].get_input_node()
+        return self.forward_backup_fn(inputs, self.name, self.App, self.app)
 
-
-        x = currentNode.block(inputs['input_ids'], token_type_ids=inputs['token_type_ids'])
-        x = torch.squeeze(x, dim=1)
-        attention_mask = torch.unsqueeze(inputs['attention_mask'], 3)
-        while currentNode.outputGates.keys().__contains__(self.name):
-            gate = currentNode.outputGates[self.name]
-            currentNode = gate.nextNode
-            if gate.fc is not None:
-                if x[0].ndim == 3:
-                    x = gate.fc(x[0])
-                else:
-                    x = gate.fc(torch.tensor(x))
-
-            for b in currentNode.block:
-                if isinstance(b, transformers.BertLayer):
-                    x = b(x[0] if isinstance(x, tuple) else x, attention_mask=attention_mask)
-                else:
-                    x = b(x[0] if isinstance(x, tuple) else x)
-
-        return x
-
-    def forward_label(self, inputs):
-        currentNode = self.App[self.app].get_input_node()
-
-
-        x = currentNode.block(inputs['input_ids'], token_type_ids=inputs['token_type_ids'])
-        x = torch.squeeze(x, dim=1)
-        attention_mask = torch.unsqueeze(inputs['attention_mask'], 3)
-        while currentNode.outputGates.keys().__contains__(self.name):
-            gate = currentNode.outputGates[self.name]
-            currentNode = gate.nextNode
-
-            if currentNode.type != BlockType.Output: continue
-            for b in currentNode.block:
-                if isinstance(b, transformers.BertLayer):
-                    x = b(x, attention_mask=attention_mask)
-                else:
-                    x = b(x)
-
-        return x
 
     def fetch_fc(self):
         currentNode = self.App[self.app].get_input_node()
@@ -119,9 +69,12 @@ class Path(nn.Module):
             gate = currentNode.outputGates[self.name]
             currentNode = gate.nextNode
             if gate.fc is not None:
-                self.fc_layers.append(len(self.layers))
-                self.layers.append(gate.fc)
-                self.layers[-1].requires_grad_(True)
+                for fc in gate.fc:
+                    self.fc_layers.append(len(self.layers))
+                    self.layers.append(fc)
+                    self.layers[-1].requires_grad_(True)
+                batch_norm = nn.BatchNorm1d(num_features=gate.fc[-1].out_features)
+                self.layers.append(batch_norm)
 
         if currentNode.type == BlockType.Output:
             for l in currentNode.block:
@@ -141,7 +94,7 @@ class Path(nn.Module):
 
         for i in range(len(nodes) - 1):
             if len(nodes[i + 1].inputs) != 0 and nodes[i + 1].inputs[0] != nodes[i]:
-                fc = nn.Linear(nodes[i].outputShape, nodes[i + 1].inputShape)
+                fc = [nn.Linear(nodes[i].outputShape, nodes[i + 1].inputShape) for _ in range(5)]
             else:
                 fc = None
 
@@ -152,7 +105,7 @@ class Path(nn.Module):
 
     def save_fcs(self):
         for i, index in enumerate(self.fc_layers):
-            file_name = './cache/' + self.name + '-' + str(i) + '.pth'
+            file_name = f'./cache/{self.name}/{str(i)}.pth'
             torch.save(self.layers[index].state_dict(), file_name)
 
     def load_fcs(self):
@@ -163,11 +116,12 @@ class Path(nn.Module):
             gate = currentNode.outputGates[self.name]
             currentNode = gate.nextNode
             if gate.fc is not None:
-                file_name = './cache/' + self.name + '-' + str(fc_counter) + '.pth'
-                if os.path.exists(file_name):
-                    gate.fc.load_state_dict(torch.load(file_name))
+                for fc in gate.fc:
+                    file_name = f'./cache/{self.name}/{str(fc_counter)}.pth'
+                    if os.path.exists(file_name):
+                        fc.load_state_dict(torch.load(file_name))
 
-                fc_counter += 1
+                    fc_counter += 1
 
         self.App[self.app].update_nodes(find_root(currentNode), self.name)
 
@@ -203,7 +157,8 @@ class DnnApp:
         return self.network.get_input_node(self.name)
 
 
-    def instantiate(self, tokenizer, embBlock, networkLayers, outputBlock, inputSize, outputSize):
+    def instantiate(self, tokenizer, embBlock, networkLayers, outputBlock, inputSize, outputSize, forward=None,
+                    forward_backup=None):
 
         outputSizeEmb = embBlock.word_embeddings.embedding_dim
 
@@ -222,7 +177,8 @@ class DnnApp:
                           outputSize, BlockType.Output)
         nodeList.append(outputNode)
 
-        mainPath = Path('{}:path-main'.format(self.name), self.name, nodeList)
+        mainPath = Path('{}:path-main'.format(self.name), self.name, nodeList, forward=forward,
+                        forward_backup=forward_backup)
         self.paths = [mainPath.name]
 
         self.network.update_input_node(self.name, inputNode)
