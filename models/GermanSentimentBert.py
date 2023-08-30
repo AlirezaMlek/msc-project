@@ -4,8 +4,8 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification, Bert
 from torch.utils.data import DataLoader, Dataset
 import numpy as np
 import torch.nn.functional as F
-
-
+from tqdm import tqdm
+from models import Link
 
 """
 "oliverguhr/german-sentiment-bert" is a pre-trained language model based on the BERT architecture, specifically trained
@@ -29,7 +29,7 @@ def create_model():
 
     App = DnnApp('german-sentiment-bert', 'gsb', predictor=predictor)
     return App.instantiate(tokenizer, embLayer, networkLayers, outputBlock, 768, 768, forward=forward,
-                           forward_backup=forward_backup)
+                           link=Link.Link)
 
 
 
@@ -44,7 +44,7 @@ def zero_pad(data, max_len):
 
 
 class TextDataset(Dataset):
-    def __init__(self, file_name, tokenizer, loading_batch=1000000):
+    def __init__(self, file_name, tokenizer, device, loading_batch=1000000):
         self.file_name = file_name
         self.tokenizer = tokenizer
         self.current_batch = -1
@@ -52,6 +52,7 @@ class TextDataset(Dataset):
         self.data = []
         self.loading_batch = loading_batch
         self.label_tags = ['__label__positive', '__label__negative', '__label__neutral']
+        self.device = device
 
     def __len__(self):
         return self.num_lines
@@ -67,7 +68,7 @@ class TextDataset(Dataset):
         #                                         return_tensors='pt', add_special_tokens=True).data
         token_data = self.tokenizer(data, return_tensors="pt")
 
-        token_data = {k: zero_pad(token_data[k], max_len) for k in token_data.keys()}
+        token_data = {k: zero_pad(token_data[k], max_len).to(self.device) for k in token_data.keys()}
         label = self.label_tags.index(label)
         one_hot = np.eye(3)[label]
 
@@ -99,21 +100,25 @@ class TextDataset(Dataset):
 
 
 
-def text_data_loader(data_file, tokenizer, batch_size=32, shuffle=True):
-    dataset = TextDataset(data_file, tokenizer)
+def text_data_loader(data_file, tokenizer, device, batch_size=32, shuffle=True):
+    dataset = TextDataset(data_file, tokenizer, device)
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
 
 
 
 
-def validate_model(model, data_loader, batch='all'):
+def validate_model(model, data_loader, batch='all', train=False):
 
     model.eval()
 
     all_preds = []
     all_targets = []
+
+    num_iter = len(data_loader)
+    flag = False
     with torch.no_grad():
-        for step, data in enumerate(data_loader):
+        pbar = tqdm(enumerate(data_loader), total=num_iter, disable=train)
+        for step, data in pbar:
             inputs = data[0]
             targets = data[1]
 
@@ -130,49 +135,20 @@ def validate_model(model, data_loader, batch='all'):
             if batch == 'all':
                 continue
             else:
-                if step % batch == 0 and step != 0:
+                if step % batch == 0 and step != 0 and flag:
                     break
+                flag = True
 
 
     all_preds = np.concatenate(all_preds)
     all_targets = np.concatenate(all_targets)
-    L = len(all_preds)
-    L6 = int(L / 6)
     accuracy = np.sum(all_preds == all_targets) / len(all_targets)
     print(f'Accuracy: {accuracy}')
-
-
-
-
-def forward_backup(inputs, name, App, app):
-    currentNode = App[app].get_input_node()
-
-
-    x = currentNode.block(inputs['input_ids'], token_type_ids=inputs['token_type_ids'])
-    attention_mask = inputs['attention_mask']
-    attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
-    attention_mask = attention_mask.expand(-1, 12, -1, -1)
-    while currentNode.outputGates.keys().__contains__(name):
-        gate = currentNode.outputGates[name]
-        currentNode = gate.nextNode
-        if gate.fc is not None:
-            if x[0].ndim == 3:
-                x = gate.fc(x[0])
-            else:
-                x = gate.fc(torch.tensor(x))
-
-        for b in currentNode.block:
-            if isinstance(b, BertLayer):
-                x = b(x[0] if isinstance(x, tuple) else x, attention_mask=attention_mask)
-            else:
-                x = b(x[0] if isinstance(x, tuple) else x)
-
-    return x
+    return accuracy
 
 
 
 def forward(inputs, layers):
-
     attention_mask = inputs['attention_mask']
     attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
     attention_mask = attention_mask.expand(-1, 12, -1, -1)
@@ -182,6 +158,7 @@ def forward(inputs, layers):
 
     for layer in layers[1:]:
         if isinstance(layer, BertLayer):
+            # layer.attention.output.set_active_adapters(adapter)
             x = layer(x[0] if isinstance(x, tuple) else x, attention_mask=attention_mask)
         elif isinstance(layer, nn.BatchNorm1d):
             x = x.permute(0, 2, 1)

@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
+
 from utils.BlockNode import *
 import os
-
 
 """
     Getting access to the input nodes. All application has this shared attribute
@@ -32,19 +32,19 @@ class Path(nn.Module):
 
     App = {}
 
-    def __init__(self, name, app, nodes, forward=None, forward_backup=None, forward_label=None):
+    def __init__(self, name, app, nodes, forward=None, link=None, forward_label=None):
         super(Path, self).__init__()
         self.app = app
         self.name = name
         self.acc = None
         self.ops = -1
+        self.link = link
         self.update_nodes(name, nodes)
         self.load_fcs()
         self.layers = nn.ModuleList()
         self.fc_layers = []
         self.forward_label = forward_label
         self.forward_fn = forward
-        self.forward_backup_fn = forward_backup
 
     def forward(self, inputs):
         return self.forward_fn(inputs, self.layers)
@@ -58,23 +58,16 @@ class Path(nn.Module):
         currentNode = self.App[self.app].get_input_node()
 
         while currentNode.outputGates.keys().__contains__(self.name):
-            if isinstance(currentNode.block, list):
-                for l in currentNode.block:
-                    self.layers.append(l)
-                    self.layers[-1].requires_grad_(False)
-            else:
-                self.layers.append(currentNode.block)
-                self.layers[-1].requires_grad_(False)
+            for l in currentNode.block:
+                self.layers.append(l)
 
             gate = currentNode.outputGates[self.name]
             currentNode = gate.nextNode
             if gate.fc is not None:
-                for fc in gate.fc:
-                    self.fc_layers.append(len(self.layers))
-                    self.layers.append(fc)
-                    self.layers[-1].requires_grad_(True)
-                batch_norm = nn.BatchNorm1d(num_features=gate.fc[-1].out_features)
-                self.layers.append(batch_norm)
+                self.fc_layers.append(len(self.layers))
+                self.layers.append(gate.fc)
+                for param in self.layers[-1].parameters():
+                    param.requires_grad_(True)
 
         if currentNode.type == BlockType.Output:
             for l in currentNode.block:
@@ -93,8 +86,10 @@ class Path(nn.Module):
     def update_nodes(self, name, nodes):
 
         for i in range(len(nodes) - 1):
-            if len(nodes[i + 1].inputs) != 0 and nodes[i + 1].inputs[0] != nodes[i]:
-                fc = [nn.Linear(nodes[i].outputShape, nodes[i + 1].inputShape) for _ in range(5)]
+            notBridge = nodes[i + 1].type != BlockType.Bridge and nodes[i].type!=BlockType.Bridge
+            if notBridge and (nodes[i].owner != nodes[0].owner or nodes[i+1].id-1 != nodes[i].id or
+                              nodes[i+1].owner != nodes[i].owner):
+                fc = self.link(nodes[i], nodes[i+1])
             else:
                 fc = None
 
@@ -116,12 +111,11 @@ class Path(nn.Module):
             gate = currentNode.outputGates[self.name]
             currentNode = gate.nextNode
             if gate.fc is not None:
-                for fc in gate.fc:
-                    file_name = f'./cache/{self.name}/{str(fc_counter)}.pth'
-                    if os.path.exists(file_name):
-                        fc.load_state_dict(torch.load(file_name))
+                file_name = f'./cache/{self.name}/{str(fc_counter)}.pth'
+                if os.path.exists(file_name):
+                    gate.fc.load_state_dict(torch.load(file_name))
 
-                    fc_counter += 1
+                fc_counter += 1
 
         self.App[self.app].update_nodes(find_root(currentNode), self.name)
 
@@ -157,28 +151,44 @@ class DnnApp:
         return self.network.get_input_node(self.name)
 
 
-    def instantiate(self, tokenizer, embBlock, networkLayers, outputBlock, inputSize, outputSize, forward=None,
-                    forward_backup=None):
+    def instantiate(self, tokenizer, embBlock, networkLayers, outputBlock, inputSize, outputSize=None,
+                    inputType=InputType.D1, forward=None, link=None):
 
-        outputSizeEmb = embBlock.word_embeddings.embedding_dim
-
-        inputNode = Node("{}:input".format(self.tag), 0, self.name, embBlock,
-                         None, outputSizeEmb, BlockType.Input, tokenizer)
+        if isinstance(inputSize, list):
+            outSize = inputSize[0]
+        else:
+            outSize = outputSize
+        inputNode = Node("{}:input".format(self.tag), 0, self.name, [embBlock],
+                         None, outSize, BlockType.Input, inputType, tokenizer)
 
         nodeList = [inputNode]
         numEncoders = len(networkLayers)
 
         for i in range(numEncoders):
             block = [networkLayers[i]]
-            node = Node('{}:{}'.format(self.tag, i+1), i+1, self.name, block, inputSize, outputSize, BlockType.Network)
+
+            if isinstance(inputSize, list):
+                inSize = inputSize[i]
+                outSize = inputSize[i+1]
+            else:
+                inSize = inputSize
+                outSize = outputSize
+
+            node = Node('{}:{}'.format(self.tag, i+1), i+1, self.name, block, inSize, outSize,
+                        BlockType.Network, inputType=inputType)
             nodeList.append(node)
 
-        outputNode = Node('{}:output'.format(self.tag), numEncoders+1, self.name, outputBlock, inputSize,
-                          outputSize, BlockType.Output)
+
+        if isinstance(inputSize, list):
+            inSize = inputSize[-1]
+        else:
+            inSize = inputSize
+        outputNode = Node('{}:output'.format(self.tag), numEncoders+1, self.name, outputBlock, inSize,
+                          None, BlockType.Output)
         nodeList.append(outputNode)
 
         mainPath = Path('{}:path-main'.format(self.name), self.name, nodeList, forward=forward,
-                        forward_backup=forward_backup)
+                        link=link)
         self.paths = [mainPath.name]
 
         self.network.update_input_node(self.name, inputNode)

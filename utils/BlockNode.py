@@ -5,6 +5,13 @@ class BlockType(Enum):
     Input = 1
     Network = 2
     Output = 3
+    Bridge = 4
+
+
+
+class InputType(Enum):
+    D1 = 1
+    D2 = 2
 
 
 class Gate:
@@ -14,11 +21,13 @@ class Gate:
 
 
 class Node:
-    def __init__(self, name, _id, owner, block, inputShape, outputShape, blockType, tokenizer=None):
+    def __init__(self, name, _id, owner, block, inputShape, outputShape, blockType,
+                 inputType=InputType.D1, tokenizer=None):
         self.name = name
         self.id = _id
         self.owner = owner
         self.block = block
+        self.inputType = inputType
         self.inputShape = inputShape
         self.outputShape = outputShape
         self.inputs = []

@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader, Dataset
 import numpy as np
 import torch.nn.functional as F
 from tqdm import tqdm
-
+import random
 
 """
 HooshvareLab/bert-fa-base-uncased-sentiment-snappfood refers to a specific variant of the BERT language model developed
@@ -28,7 +28,7 @@ def create_model():
 
     App = DnnApp('bert-fa-base-uncased-sentiment', 'fsb', predictor=predictor)
     return App.instantiate(tokenizer, embLayer, networkLayers, outputBlock, 768, 768, forward=forward,
-                           forward_backup=forward_backup)
+                           link=Link)
 
 
 def zero_pad(data, max_len):
@@ -41,7 +41,7 @@ def zero_pad(data, max_len):
 
 
 class TextDataset(Dataset):
-    def __init__(self, file_name, tokenizer, loading_batch=1000000):
+    def __init__(self, file_name, tokenizer, device, loading_batch=1000000):
         self.file_name = file_name
         self.tokenizer = tokenizer
         self.current_batch = -1
@@ -49,6 +49,7 @@ class TextDataset(Dataset):
         self.data = []
         self.loading_batch = loading_batch
         self.label_tags = ['HAPPY', 'SAD']
+        self.device = device
 
     def __len__(self):
         return self.num_lines
@@ -61,7 +62,7 @@ class TextDataset(Dataset):
         data_text = data_text + ' [SEP]'
 
         token_data = self.tokenizer(data_text, return_tensors="pt")
-        token_data = {k: zero_pad(token_data[k], max_len) for k in token_data.keys()}
+        token_data = {k: zero_pad(token_data[k], max_len).to(self.device) for k in token_data.keys()}
         label = int(label)
         one_hot = np.eye(2)[label]
 
@@ -75,6 +76,7 @@ class TextDataset(Dataset):
 
         with open(self.file_name, 'r') as f:
             self.data = f.readlines()[start:end]
+            random.shuffle(self.data)
         f.close()
 
     def check_index(self, index):
@@ -92,20 +94,26 @@ class TextDataset(Dataset):
 
 
 
-def text_data_loader(data_file, tokenizer, batch_size=32, shuffle=True):
-    dataset = TextDataset(data_file, tokenizer)
+def text_data_loader(data_file, tokenizer, device, batch_size=32, shuffle=True):
+    dataset = TextDataset(data_file, tokenizer, device)
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
 
 
 
-def validate_model(model, data_loader):
+
+
+def validate_model(model, data_loader, batch='all', train=False):
 
     model.eval()
 
     all_preds = []
     all_targets = []
+
+    num_iter = len(data_loader)
+    flag = False
     with torch.no_grad():
-        for step, data in tqdm(enumerate(data_loader)):
+        pbar = tqdm(enumerate(data_loader), total=num_iter, disable=train)
+        for step, data in pbar:
             inputs = data[0]
             targets = data[1]
 
@@ -119,42 +127,39 @@ def validate_model(model, data_loader):
             targets = targets.numpy()
             all_targets.append(np.argmax(targets, 1))
 
+            if batch == 'all':
+                continue
+            else:
+                if step % batch == 0 and step != 0 and flag:
+                    break
+                flag = True
+
 
     all_preds = np.concatenate(all_preds)
     all_targets = np.concatenate(all_targets)
-    L = len(all_preds)
-    L6 = int(L / 6)
     accuracy = np.sum(all_preds == all_targets) / len(all_targets)
     print(f'Accuracy: {accuracy}')
+    return accuracy
 
 
 
 
-def forward_backup(inputs, name, App, app):
-    currentNode = App[app].get_input_node()
+class Link(nn.Module):
+    def __init__(self, src_node, dst_node):
+        super(Link, self).__init__()
+
+        in_size = src_node.outputShape
+        out_size = dst_node.inputShape
+
+        self.fc = nn.Linear(in_size, out_size)
+        nn.init.eye_(self.fc.weight)
+        nn.init.zeros_(self.fc.bias)
 
 
-    x = currentNode.block(inputs['input_ids'], token_type_ids=inputs['token_type_ids'])
-    attention_mask = inputs['attention_mask']
-    attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
-    attention_mask = attention_mask.expand(-1, 12, -1, -1)
-    while currentNode.outputGates.keys().__contains__(name):
-        gate = currentNode.outputGates[name]
-        currentNode = gate.nextNode
-        if gate.fc is not None:
-            for fc in gate.fc:
-                if x[0].ndim == 3:
-                    x = fc(x[0])
-                else:
-                    x = fc(torch.tensor(x))
+    def forward(self, x):
+        x = F.relu(self.fc(x))
 
-        for b in currentNode.block:
-            if isinstance(b, BertLayer):
-                x = b(x[0] if isinstance(x, tuple) else x, attention_mask=attention_mask)
-            else:
-                x = b(x[0] if isinstance(x, tuple) else x)
-
-    return x
+        return x
 
 
 
@@ -166,8 +171,8 @@ def forward(inputs, layers):
 
     x = layers[0](inputs['input_ids'], token_type_ids=inputs['token_type_ids'])
     x = torch.squeeze(x, dim=1)
-
-    for layer in layers[1:]:
+    L = len(layers)-1
+    for l, layer in enumerate(layers[1:]):
         if isinstance(layer, BertLayer):
             x = layer(x[0] if isinstance(x, tuple) else x, attention_mask=attention_mask)
         elif isinstance(layer, nn.BatchNorm1d):
@@ -175,6 +180,16 @@ def forward(inputs, layers):
             x = layer(x)
             x = x.permute(0, 2, 1)
         else:
-            x = layer(x[0] if isinstance(x, tuple) else x)
+            if l > L-3:
+                x = layer(x)
+            elif l==L-3:
+                x = layer(x[0])
+            else:
+                if isinstance(layer, nn.ReLU):
+                    x = layer(x)
+                    x = x + res
+                else:
+                    res = x[0]
+                    x = layer(x[0])
 
     return x

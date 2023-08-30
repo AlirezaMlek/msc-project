@@ -4,7 +4,7 @@ from utils.BlockNetwork import *
 import torch
 from transformers import BertTokenizer, BertForMaskedLM
 from torch.utils.data import DataLoader, Dataset
-
+from models import Link
 
 
 """
@@ -109,4 +109,7 @@ def create_model():
             return tokenizer.convert_ids_to_tokens(indices[0][1:n],)
 
     App = DnnApp('bert-base-uncased', 'bbu', predictor=predictor)
-    return App.instantiate(tokenizer, embLayer, networkLayers, outputBlock, 768, 768)
+    return App.instantiate(tokenizer, embLayer, networkLayers, outputBlock, 768, 768, link=Link.Link)
+
+
+
