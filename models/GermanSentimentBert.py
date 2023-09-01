@@ -21,7 +21,7 @@ def create_model():
 
     embLayer = model.bert.embeddings
     networkLayers = model.bert.encoder.layer
-    outputBlock = [model.bert.pooler, model.classifier, torch.nn.Softmax(dim=1)]
+    outputBlock = [model.bert.pooler, model.classifier]
 
     def predictor(scores):
         labels = ['positive', 'negative', 'neutral']

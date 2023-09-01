@@ -38,7 +38,7 @@ def create_model():
 
     networkLayers = [model.features[0:3], model.features[3:6], model.features[6:8],
                      model.features[8:10], model.features[10:13]]
-    outputBlock = [model.avgpool, nn.Flatten(start_dim=1), model.classifier, nn.Softmax(dim=0)]
+    outputBlock = [model.avgpool, nn.Flatten(start_dim=1)]
 
 
     # calculating size #########
@@ -64,8 +64,8 @@ def forward(inputs, layers):
                 isinstance(layer, nn.Flatten) or isinstance(layer, nn.Softmax) or isinstance(layer,nn.AdaptiveAvgPool2d):
             x = layer(x[0] if isinstance(x, tuple) else x)
         else:
-            s = (x[0] if isinstance(x, tuple) else x).shape[1]
-            attention = torch.ones(1, 1, s, s, dtype=torch.long)
+            s = (x[0].shape if isinstance(x, tuple) else x.shape)
+            attention = torch.ones(s[0], 1, s[1], s[1], dtype=torch.long)
             x = layer(x[0] if isinstance(x, tuple) else x, attention, attention)
 
     return x

@@ -20,7 +20,7 @@ def create_model():
 
     embLayer = model.bert.embeddings
     networkLayers = model.bert.encoder.layer
-    outputBlock = [model.bert.pooler, model.classifier, torch.nn.Softmax(dim=1)]
+    outputBlock = [model.bert.pooler, model.classifier]
 
     def predictor(scores):
         labels = ['HAPPY', 'SAD']
@@ -180,16 +180,6 @@ def forward(inputs, layers):
             x = layer(x)
             x = x.permute(0, 2, 1)
         else:
-            if l > L-3:
-                x = layer(x)
-            elif l==L-3:
-                x = layer(x[0])
-            else:
-                if isinstance(layer, nn.ReLU):
-                    x = layer(x)
-                    x = x + res
-                else:
-                    res = x[0]
-                    x = layer(x[0])
+            x = layer(x[0] if isinstance(x, tuple) else x)
 
     return x
