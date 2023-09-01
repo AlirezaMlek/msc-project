@@ -23,8 +23,8 @@ class Link(nn.Module):
         elif src_node.inputType == InputType.D2 and dst_node.inputType == InputType.D2:
             in_dept = src_node.outputShape[1]
             in_size = src_node.outputShape[-1]
-            out_size = dst_node.outputShape[1]
-            out_dept = dst_node.outputShape[-1]
+            out_dept = dst_node.inputShape[1]
+            out_size = dst_node.inputShape[-1]
 
         else:
             in_size = src_node.outputShape
@@ -48,7 +48,8 @@ class Link(nn.Module):
         if hasattr(self, 'unflatten'):
             x = self.unflatten(x)
 
-        x = F.relu(self.layer(x))
+        # x = F.relu(self.layer(x))
+        x = self.layer(x)
 
         if hasattr(self, 'flatten'):
             x = self.flatten(x)
