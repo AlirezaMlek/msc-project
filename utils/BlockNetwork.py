@@ -3,6 +3,8 @@ import torch.nn as nn
 
 from utils.BlockNode import *
 import os
+from models.Link import ConcatLayer
+from utils.Utils import *
 
 """
     Getting access to the input nodes. All application has this shared attribute
@@ -22,6 +24,14 @@ class BlockNetwork:
     def update_input_node(self, owner, node):
         BlockNetwork.inputNodes[owner] = node
 
+    def find_node(self, app, name):
+        node = self.get_input_node(app)
+        path = app + ':path-main'
+        while node.name != name:
+            node = node.outputGates[path].nextNode
+
+        return node
+
 
 
 """
@@ -32,7 +42,7 @@ class Path(nn.Module):
 
     App = {}
 
-    def __init__(self, name, app, nodes, forward=None, link=None, forward_label=None):
+    def __init__(self, name, app, nodes, link=None, forward_label=None):
         super(Path, self).__init__()
         self.app = app
         self.name = name
@@ -40,84 +50,154 @@ class Path(nn.Module):
         self.ops = -1
         self.link = link
         self.update_nodes(name, nodes)
-        self.load_fcs()
-        self.layers = nn.ModuleList()
-        self.fc_layers = []
+        self.inputNode = self.App[self.app].get_input_node()
+        self.load_links()
+        self.layers_host = nn.ModuleList()
         self.forward_label = forward_label
-        self.forward_fn = forward
+        self.num_nodes = len(nodes) - 1
 
-    def forward(self, inputs):
-        return self.forward_fn(inputs, self.layers)
+        main_branch = Branch(self.name, self.name, self.app, 0, 0)
+        self.branches = {'main': main_branch}
 
+    def forward(self, inputs, branch_name=None):
 
-    def forward_backup(self, inputs):
-        return self.forward_backup_fn(inputs, self.name, self.App, self.app)
+        if branch_name is not None:
+            branch = self.branches[branch_name]
+        else:
+            branch = self.branches['main']
 
+        node = self.inputNode
+        data = node(inputs, branch)
 
-    def fetch_fc(self):
-        currentNode = self.App[self.app].get_input_node()
+        if branch.is_main:
+            return data
 
-        while currentNode.outputGates.keys().__contains__(self.name):
-            for l in currentNode.block:
-                self.layers.append(l)
+        out_main_node = self.App[self.app].find_node(self.app, branch.out_main)
 
-            gate = currentNode.outputGates[self.name]
-            currentNode = gate.nextNode
-            if gate.fc is not None:
-                self.fc_layers.append(len(self.layers))
-                self.layers.append(gate.fc)
-                for param in self.layers[-1].parameters():
-                    param.requires_grad_(True)
+        branch_data = out_main_node(data, branch)
 
-        if currentNode.type == BlockType.Output:
-            for l in currentNode.block:
-                self.layers.append(l)
-                self.layers[-1].requires_grad_(False)
+        branch.name = self.name
+        main_data = out_main_node(data, branch)
 
+        in_main_node = self.App[self.app].find_node(self.app, branch.in_main)
 
-    def get_input_node(self):
-        return self.App[self.app].get_input_node()
+        branch.name = branch_name
+        comb_data = {'main': main_data, 'branch': branch_data}
+        data = in_main_node(comb_data, branch)
 
-
+        return data
 
     """
     update nodes when a path is created
     """
-    def update_nodes(self, name, nodes):
+    def update_nodes(self, name, nodes, is_branch=False):
 
         for i in range(len(nodes) - 1):
-            notBridge = nodes[i + 1].type != BlockType.Bridge and nodes[i].type!=BlockType.Bridge
-            if notBridge and (nodes[i].owner != nodes[0].owner or nodes[i+1].id-1 != nodes[i].id or
-                              nodes[i+1].owner != nodes[i].owner):
-                fc = self.link(nodes[i], nodes[i+1])
-            else:
-                fc = None
+            if nodes[i].owner != nodes[0].owner or \
+                    (nodes[i+1].id-1 != nodes[i].id and nodes[i+1].owner == nodes[0].owner):
 
-            nodes[i].add_output_gate(name, nodes[i + 1], fc)
+                if nodes[i].inputType == InputType.D1:
+                    nodes[i].block[0].layer_norm2 = nn.Sequential()
+
+                link = self.link(nodes[i], nodes[i + 1])
+                nodes[i].add_output_gate(name, nodes[i + 1], link)
+
+            elif not is_branch or (nodes[i].owner == nodes[0].owner and nodes[i+1].owner != nodes[0].owner):
+                link = None
+                nodes[i].add_output_gate(name, nodes[i + 1], link)
+
+
+            if nodes[i].owner == nodes[0].owner and nodes[i-1].owner != nodes[0].owner:
+                link = ConcatLayer(nodes[i])
+                nodes[i].add_input_gate(name, link)
+
+            elif nodes[i].owner != nodes[0].owner and nodes[i-1].owner == nodes[0].owner:
+                link = self.link(nodes[i-1], nodes[i])
+                nodes[i].add_input_gate(name, link)
 
         self.App[self.app].update_nodes(nodes[0], self.name)
 
 
-    def save_fcs(self):
-        for i, index in enumerate(self.fc_layers):
-            file_name = f'./cache/{self.name}/{str(i)}.pth'
-            torch.save(self.layers[index].state_dict(), file_name)
+    def save_links(self, currentNode=None):
+        if currentNode in None:
+            currentNode = self.inputNode
 
-    def load_fcs(self):
-        currentNode = self.App[self.app].get_input_node()
-        fc_counter = 0
+        for gate in currentNode.inputGates.keys():
+            name = f'./cache/{self.name}/{currentNode.name}-in-{gate}.pth'
+            link = currentNode.inputGates[gate]
+            torch.save(link, name)
+
+        outputGates = currentNode.outputGates
+        for gate in outputGates.keys():
+            if gate.__contains__(self.name):
+                link = outputGates[gate].link
+                if link is not None:
+                    name = f'./cache/{self.name}/{currentNode.name}-{outputGates[gate].nextNode.name}-out-{gate}.pth'
+                    torch.save(link, name)
+
+                self.save_links(outputGates[gate].nextNode)
+
+
+    def load_links(self):
+        currentNode = self.inputNode
         while currentNode.outputGates.keys().__contains__(self.name):
 
-            gate = currentNode.outputGates[self.name]
-            currentNode = gate.nextNode
-            if gate.fc is not None:
-                file_name = f'./cache/{self.name}/{str(fc_counter)}.pth'
-                if os.path.exists(file_name):
-                    gate.fc.load_state_dict(torch.load(file_name))
+            outputGates = currentNode.outputGates
+            for gate in outputGates:
+                if gate.__contains__(self.name):
+                    link = outputGates[gate].link
+                    if link is not None:
+                        name = f'./cache/{self.name}/{currentNode.name}-{outputGates[gate].nextNode.name}-out-{gate}.pth'
+                        if os.path.exists(name):
+                            outputGates[gate].link.load_state_dict(torch.load(name))
 
-                fc_counter += 1
+            currentNode = outputGates[self.name].nextNode
 
         self.App[self.app].update_nodes(find_root(currentNode), self.name)
+
+
+
+    def new_branch(self, App, out_main, in_host, out_host, in_main):
+
+        # if out_main > self.num_nodes or in_main > self.num_nodes:
+        #     raise AssertionError(f'input indices must be less than {self.num_nodes + 1}')
+
+        inputNode1 = self.inputNode
+        inputNode2 = App.get_input_node()
+        nodes = collect_new_path_nodes_cross_path(inputNode1, inputNode2, out_main, in_host, out_host, in_main,
+                                                  self.name)
+
+        out_main_name = nodes[out_main].name
+        in_host_name = nodes[out_main+1].name
+        out_host_name = nodes[out_main + out_host - in_host + 1].name
+        in_main_name = nodes[out_main + out_host - in_host + 2].name
+
+        branchName = self.name + '-b' + str(len(self.branches))
+        self.update_nodes(branchName, nodes, is_branch=True)
+
+        self.branches[branchName] = Branch(branchName, self.name, App, out_main_name, in_main_name, in_host_name,
+                                           out_host_name, False)
+
+
+    def link_require_grad(self, branch_name='main', require=True, currentNode=None):
+
+        if currentNode is None:
+            currentNode = self.inputNode
+
+        for gate in currentNode.inputGates.keys():
+            link = currentNode.inputGates[gate]
+            for param in link.parameters():
+                param.requires_grad = require
+
+        outputGates = currentNode.outputGates
+        for gate in outputGates.keys():
+            if gate in [self.name, branch_name]:
+                link = outputGates[gate].link
+                if link is not None:
+                    for param in link.parameters():
+                        param.requires_grad = require
+
+                self.link_require_grad(branch_name, require, outputGates[gate].nextNode)
 
 
 class DnnApp:
@@ -159,7 +239,7 @@ class DnnApp:
         else:
             outSize = outputSize
         inputNode = Node("{}:input".format(self.tag), 0, self.name, [embBlock],
-                         None, outSize, BlockType.Input, inputType, tokenizer)
+                         None, outSize, BlockType.Input, forward, inputType, tokenizer)
 
         nodeList = [inputNode]
         numEncoders = len(networkLayers)
@@ -175,7 +255,7 @@ class DnnApp:
                 outSize = outputSize
 
             node = Node('{}:{}'.format(self.tag, i+1), i+1, self.name, block, inSize, outSize,
-                        BlockType.Network, inputType=inputType)
+                        BlockType.Network, inputType=inputType, forward=forward)
             nodeList.append(node)
 
 
@@ -184,11 +264,10 @@ class DnnApp:
         else:
             inSize = inputSize
         outputNode = Node('{}:output'.format(self.tag), numEncoders+1, self.name, outputBlock, inSize,
-                          None, BlockType.Output)
+                          None, BlockType.Output, inputType=inputType, forward=forward)
         nodeList.append(outputNode)
 
-        mainPath = Path('{}:path-main'.format(self.name), self.name, nodeList, forward=forward,
-                        link=link)
+        mainPath = Path('{}:path-main'.format(self.name), self.name, nodeList, link=link)
         self.paths = [mainPath.name]
 
         self.network.update_input_node(self.name, inputNode)
@@ -199,11 +278,17 @@ class DnnApp:
     def predict(self, scores):
         return self.predictor(scores)
 
+    def find_node(self, app, name):
+        return self.network.find_node(app, name)
 
 
+    def set_device(self, device):
+        main_path = self.paths[0]
+        node = self.get_input_node()
+        node.to(device)
+        node.device = device
 
-def find_root(node):
-    if node.type == BlockType.Input:
-        return node
-    else:
-        return find_root(node.inputs[0])
+        while node.outputGates.keys().__contains__(main_path):
+            node = node.outputGates[main_path].nextNode
+            node.to(device)
+            node.device = device

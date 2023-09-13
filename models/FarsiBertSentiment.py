@@ -1,3 +1,5 @@
+from transformers.models.bert.modeling_bert import BertEmbeddings
+
 from utils.BlockNetwork import *
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, BertLayer
@@ -63,10 +65,13 @@ class TextDataset(Dataset):
 
         token_data = self.tokenizer(data_text, return_tensors="pt")
         token_data = {k: zero_pad(token_data[k], max_len).to(self.device) for k in token_data.keys()}
+
+        token_data['attention_mask'] = token_data['attention_mask'].unsqueeze(0).unsqueeze(1)
+        token_data['attention_mask'] = token_data['attention_mask'].expand(12, -1, -1)
         label = int(label)
         one_hot = np.eye(2)[label]
 
-        return (token_data, one_hot)
+        return token_data, one_hot
 
     def partial_data_loader(self):
         self.current_batch += 1
@@ -165,21 +170,17 @@ class Link(nn.Module):
 
 def forward(inputs, layers):
 
-    attention_mask = inputs['attention_mask']
-    attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
-    attention_mask = attention_mask.expand(-1, 12, -1, -1)
-
-    x = layers[0](inputs['input_ids'], token_type_ids=inputs['token_type_ids'])
-    x = torch.squeeze(x, dim=1)
-    L = len(layers)-1
-    for l, layer in enumerate(layers[1:]):
-        if isinstance(layer, BertLayer):
-            x = layer(x[0] if isinstance(x, tuple) else x, attention_mask=attention_mask)
-        elif isinstance(layer, nn.BatchNorm1d):
-            x = x.permute(0, 2, 1)
-            x = layer(x)
-            x = x.permute(0, 2, 1)
+    for layer in layers:
+        if isinstance(layer, BertEmbeddings):
+            inputs['input_ids'] = layer(inputs['input_ids'], token_type_ids=inputs['token_type_ids'])
+            inputs['input_ids'] = torch.squeeze(inputs['input_ids'], dim=1)
+        elif isinstance(layer, BertLayer):
+            inputs['input_ids'] = layer(inputs['input_ids'][0] if isinstance(inputs['input_ids'], tuple) else inputs['input_ids'],
+                                        attention_mask=inputs['attention_mask'])
         else:
-            x = layer(x[0] if isinstance(x, tuple) else x)
+            if isinstance(inputs, dict):
+                inputs = layer(inputs['input_ids'][0] if isinstance(inputs['input_ids'], tuple) else inputs['input_ids'])
+            else:
+                inputs = layer(inputs)
 
-    return x
+    return inputs

@@ -6,9 +6,9 @@ from tqdm import tqdm
 """
     train path
 """
-def train(model, train_loader, loss_fn, optimizer, valid_loader, validator, val_stops=3):
+def train(model, branch, train_loader, loss_fn, optimizer, valid_loader, validator, val_stops=3):
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'mps')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
     model.train()
     cpu_device = torch.device('cpu')
@@ -39,7 +39,7 @@ def train(model, train_loader, loss_fn, optimizer, valid_loader, validator, val_
             if step < last_step: continue
             inputs = batch[0]
             label = batch[1]
-            outputs = model(inputs)
+            outputs = model(inputs, branch)
             # attention_mask = torch.squeeze(batch['attention_mask'], dim=1)
 
             # outputs = select_masked(outputs, attention_mask)
@@ -55,7 +55,7 @@ def train(model, train_loader, loss_fn, optimizer, valid_loader, validator, val_
                 o = o.to(cpu_device)
                 loss += loss_fn(o, l)
 
-            loss /= len(batch)
+            loss /= len(batch[1])
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
@@ -76,7 +76,7 @@ def train(model, train_loader, loss_fn, optimizer, valid_loader, validator, val_
                     max_valid_acc = last_valid_acc
 
 
-                if last_valid_acc < prev_valid_acc and epoch >= 2:
+                if last_valid_acc < prev_valid_acc and epoch >= 3:
                     print('stop training... max valid acc:  ', max_valid_acc)
                     flag = False
                     break
@@ -109,3 +109,25 @@ def get_stops(val_stops, total_steps):
         stops.append(stop)
 
     return stops
+
+
+
+# def optimizer(path, branch_name='main', currentNode=None, collected_params=None):
+#     if currentNode is None:
+#         currentNode = path.get_input_node()
+#         collected_params = []
+#
+#     for gate in currentNode.inputGates.keys():
+#         link = currentNode.inputGates[gate]
+#         collected_params.append(link)
+#
+#     outputGates = currentNode.outputGates
+#     for gate in outputGates.keys():
+#         if gate in [self.name, branch_name]:
+#             link = outputGates[gate].link
+#             if link is not None:
+#                 for param in link.parameters():
+#                     param.requires_grad = require
+#
+#             self.link_require_grad(branch_name, require, outputGates[gate].nextNode)
+

@@ -2,6 +2,7 @@
 from transformers import AutoProcessor, AutoModel
 from utils.BlockNode import InputType
 import torch
+from torch import nn
 from utils.BlockNetwork import DnnApp, BlockNetwork
 import cv2
 
@@ -14,7 +15,7 @@ def create_model():
 
     embLayer = model.vision_model.embeddings
     networkLayers = model.vision_model.encoder.layers
-    outputBlock = [torch.nn.Softmax(dim=1)]
+    outputBlock = [nn.Sequential()]
 
     def predictor(scores):
         pass
@@ -24,8 +25,14 @@ def create_model():
                            forward=forward)
 
 
-def forward():
-    pass
+device = torch.device('mps')
+
+def forward(x, layers):
+    for layer in layers:
+        s = (x[0].shape if isinstance(x, tuple) else x.shape)
+        attention = torch.ones(s[0], 1, s[1], s[1], dtype=torch.long).to(device)
+        x = layer(x[0] if isinstance(x, tuple) else x, attention, attention)
+    return x[0] if isinstance(x, tuple) else x
 
 
 

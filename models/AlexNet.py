@@ -11,7 +11,6 @@ import torch
 import torchvision
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
-from models import trainer
 def create_model():
 
     classes = ('Airplane', 'Car', 'Bird', 'Cat', 'Deer', 'Dog', 'Frog', 'Horse', 'Ship', 'Truck')
@@ -23,27 +22,24 @@ def create_model():
 
     model = cmodels.alexnet(pretrained=True)
 
-    for param in model.parameters():
-        param.requires_grad = False
-
     model.classifier[1] = nn.Linear(9216, 4096)
     model.classifier[4] = nn.Linear(4096, 1024)
     model.classifier[6] = nn.Linear(1024, 10)
 
-    for param in model.classifier.parameters():
-        param.requires_grad = True
+    for param in model.parameters():
+        param.requires_grad = False
+
 
     embLayer = nn.Sequential()
 
-
     networkLayers = [model.features[0:3], model.features[3:6], model.features[6:8],
                      model.features[8:10], model.features[10:13]]
-    outputBlock = [model.avgpool, nn.Flatten(start_dim=1)]
+    outputBlock = [model.avgpool, nn.Flatten(start_dim=1), model.classifier]
 
 
     # calculating size #########
     a = embLayer(torch.randn((1, 3, 224, 224)))
-    sizes = [[3, 244, 244]]
+    sizes = [[1, 3, 224, 224]]
 
     for blk in networkLayers:
         for i in range(len(blk)):
@@ -53,22 +49,16 @@ def create_model():
     ###########################
 
     App = DnnApp('alexnet', 'alx', predictor=predictor)
-    return App.instantiate(None, embLayer, networkLayers, outputBlock, sizes, inputType=InputType.D2, forward=forward)
+    return App.instantiate(None, embLayer, networkLayers, outputBlock, sizes, inputType=InputType.D2, forward=forward,
+                           link=Link.Link)
 
 
-def forward(inputs, layers):
+def forward(x, layers):
 
-    x = torch.tensor(inputs, dtype=torch.float32)
     for layer in layers:
-        if isinstance(layer, nn.Sequential) or isinstance(layer, Link.Link) or \
-                isinstance(layer, nn.Flatten) or isinstance(layer, nn.Softmax) or isinstance(layer,nn.AdaptiveAvgPool2d):
-            x = layer(x[0] if isinstance(x, tuple) else x)
-        else:
-            s = (x[0].shape if isinstance(x, tuple) else x.shape)
-            attention = torch.ones(s[0], 1, s[1], s[1], dtype=torch.long)
-            x = layer(x[0] if isinstance(x, tuple) else x, attention, attention)
+        x = layer(x[0] if isinstance(x, tuple) else x)
 
-    return x
+    return x[0] if isinstance(x, tuple) else x
 
 
 
