@@ -1,4 +1,3 @@
-
 """
     new path contains some nodes of path1 and path2
     @param inputNode2: input node of path2
@@ -77,3 +76,12 @@ def find_root(node):
 
 
 
+def copy_data(data):
+    if isinstance(data, dict):
+        data_copy = {}
+        for k in data.keys():
+            data_copy[k] = data[k][0].clone() if isinstance(data[k], tuple) else data[k].clone()
+    else:
+        data_copy = data[0].clone() if isinstance(data, tuple) else data.clone()
+
+    return data_copy

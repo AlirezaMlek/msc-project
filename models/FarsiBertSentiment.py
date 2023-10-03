@@ -8,6 +8,7 @@ import numpy as np
 import torch.nn.functional as F
 from tqdm import tqdm
 import random
+from models.Link import Link
 
 """
 HooshvareLab/bert-fa-base-uncased-sentiment-snappfood refers to a specific variant of the BERT language model developed
@@ -107,7 +108,7 @@ def text_data_loader(data_file, tokenizer, device, batch_size=32, shuffle=True):
 
 
 
-def validate_model(model, data_loader, batch='all', train=False):
+def validate_model(model, branch, data_loader, batch='all', train=False):
 
     model.eval()
 
@@ -122,7 +123,7 @@ def validate_model(model, data_loader, batch='all', train=False):
             inputs = data[0]
             targets = data[1]
 
-            outputs = model.forward(inputs)
+            outputs = model(inputs)
 
             # Get predictions in numpy array
             preds = outputs.detach().cpu().numpy()
@@ -146,25 +147,6 @@ def validate_model(model, data_loader, batch='all', train=False):
     print(f'Accuracy: {accuracy}')
     return accuracy
 
-
-
-
-class Link(nn.Module):
-    def __init__(self, src_node, dst_node):
-        super(Link, self).__init__()
-
-        in_size = src_node.outputShape
-        out_size = dst_node.inputShape
-
-        self.fc = nn.Linear(in_size, out_size)
-        nn.init.eye_(self.fc.weight)
-        nn.init.zeros_(self.fc.bias)
-
-
-    def forward(self, x):
-        x = F.relu(self.fc(x))
-
-        return x
 
 
 

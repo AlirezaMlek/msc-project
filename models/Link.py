@@ -4,7 +4,7 @@ import numpy as np
 import torch
 
 class Link(nn.Module):
-    def __init__(self, src_node, dst_node):
+    def __init__(self, src_node, dst_node, add_norm=True):
         super(Link, self).__init__()
 
         self.layers = nn.ModuleList()
@@ -22,7 +22,7 @@ class Link(nn.Module):
             in_dept = 5
             in_size = int(np.sqrt(src_node.outputShape))
             out_size = dst_node.inputShape[-1]
-            out_dept = 5
+            out_dept = dst_node.inputShape[1]
             unflatten = nn.Unflatten(2, (in_size, in_size))
             self.layers.append(unflatten)
 
@@ -46,8 +46,8 @@ class Link(nn.Module):
 
             self.layers.append(layer)
 
-            # batchNorm = nn.BatchNorm2d(num_features=out_dept)
-            # self.layers.append(batchNorm)
+            batchNorm = nn.BatchNorm2d(num_features=out_dept)
+            self.layers.append(batchNorm)
             #
             # maxPool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
             # self.layers.append(maxPool)
@@ -63,20 +63,20 @@ class Link(nn.Module):
         else:
 
             layer1 = nn.Linear(in_size, 100)
-            nn.init.eye_(layer1.weight)
-            nn.init.zeros_(layer1.bias)
+            #             nn.init.eye_(layer1.weight)
+            #             nn.init.zeros_(layer1.bias)
 
             layer2 = nn.Linear(100, out_size)
-            nn.init.eye_(layer2.weight)
-            nn.init.zeros_(layer2.bias)
-
-            norm = nn.LayerNorm(normalized_shape=out_size)
-            drop = nn.Dropout(p=.1)
+            #             nn.init.eye_(layer2.weight)
+            #             nn.init.zeros_(layer2.bias)
 
             self.layers.append(layer1)
             self.layers.append(layer2)
-            self.layers.append(norm)
-            # self.layers.append(drop)
+            if add_norm:
+                norm = nn.LayerNorm(normalized_shape=out_size)
+                #                 drop = nn.Dropout(p=.1)
+                #                 self.layers.append(drop)
+                self.layers.append(norm)
 
     def forward(self, x):
 
@@ -89,9 +89,7 @@ class Link(nn.Module):
         return x
 
 
-
 def param(m, n):
-
     if n == m:
         return 1, 0, 1
 
@@ -107,25 +105,23 @@ def param(m, n):
         kernel_size -= 1
         rem = n - (m - 1) * stride
 
-
     padding = int((kernel_size - rem) / 2)
 
-    kernel_size += (kernel_size-rem) % 2
+    kernel_size += (kernel_size - rem) % 2
 
-    if (n-kernel_size+2*padding)/stride + 1 < m:
-        add = (n-kernel_size+2*padding) % stride
+    if (n - kernel_size + 2 * padding) / stride + 1 < m:
+        add = (n - kernel_size + 2 * padding) % stride
         kernel_size -= stride - add
-    elif (n-kernel_size+2*padding)/stride + 1 > m:
-        kernel_size += ((n-kernel_size+2*padding) % stride)
+    elif (n - kernel_size + 2 * padding) / stride + 1 > m:
+        kernel_size += ((n - kernel_size + 2 * padding) % stride)
 
     return kernel_size, padding, stride
-
 
 
 class CoeffLayer(nn.Module):
     def __init__(self, in_channels, coeff=0.5):
         super(CoeffLayer, self).__init__()
-        self.coeff = nn.Parameter(torch.ones(1,in_channels,1,1)*coeff)
+        self.coeff = nn.Parameter(torch.ones(1, in_channels, 1, 1) * coeff)
 
     def forward(self, x):
         return self.coeff * x
@@ -145,15 +141,30 @@ class ConcatLayer(nn.Module):
             self.layers.append(layer)
         else:
             self.dim = -1
-            in_dept = node.inputShape * 2
+            in_dept = node.inputShape
             out_dept = node.inputShape
             layer = nn.Linear(in_dept, out_dept)
+
+            nn.init.eye_(layer.weight)
+            nn.init.zeros_(layer.bias)
+
             self.layers.append(layer)
 
+    #             norm = nn.LayerNorm(normalized_shape=out_dept)
+    #             self.layers.append(norm)
 
-    def forward(self, data):
+    def forward(self, data1, data2):
+        if isinstance(data1, dict):
 
-        x = torch.cat((data['main'], data['branch']), dim=self.dim)
-        for layer in self.layers:
-            x = layer(x)
-        return x
+            data1['input_ids'] = data1['input_ids'][0] if isinstance(data1['input_ids'], tuple) else data1[
+                                                                                                         'input_ids'] + \
+                                                                                                     data2['input_ids'][
+                                                                                                         0] if isinstance(
+                data2['input_ids'], tuple) else data2['input_ids']
+            data1['input_ids'] = data1['input_ids'] / 2
+            #             for layer in self.layers:
+            #                 data1['input_ids'] = layer(data1['input_ids'][0] if isinstance(data1['input_ids'], tuple) else data1['input_ids'])
+            return data1
+
+        else:
+            return data1 + data2

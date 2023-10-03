@@ -8,8 +8,8 @@ class BlockType(Enum):
     Output = 3
 
 class Branch:
-    def __init__(self, name, path, app, out_main, in_main, in_branch=None, out_branch=None, is_main=True):
-
+    def __init__(self, name, path, app, out_main, in_main, in_branch=None, out_branch=None, is_main=True,
+                 is_residual=True):
         self.is_main = is_main
         self.name = name
         self.path = path
@@ -18,6 +18,7 @@ class Branch:
         self.in_branch = in_branch
         self.out_branch = out_branch
         self.in_main = in_main
+        self.is_residual = is_residual
 
 
 class InputType(Enum):
@@ -69,12 +70,14 @@ class Node(nn.Module):
         self.inputGates[branch] = link
 
     def forward(self, data, branch):
-
         # forward input link
-        if self.inputGates.keys().__contains__(branch.name):
-            data = self.inputGates[branch.name](data)
 
-        # forward node block
+        if self.inputGates.keys().__contains__(branch.name):
+            if isinstance(data, dict) and data.keys().__contains__('data1'):
+                data = self.inputGates[branch.name](**data)
+            else:
+                data = self.inputGates[branch.name](data)
+
         x = self.forward_fn(data, self.block)
         if self.type == BlockType.Output:
             return x
@@ -88,11 +91,13 @@ class Node(nn.Module):
         # forward gate
         gate = self.outputGates[next_name]
         if gate.link is not None:
-            x = gate.link(x)
+            x = self.outputGates[next_name].link(x)
 
-        # if has another owner then return data
-        next_node = gate.nextNode
-        if next_node.name in [branch.out_main, branch.in_main]:
+        # if it has another owner then return data
+        if self.name in [branch.out_main, branch.out_branch]:
             return x
 
-        return gate.nextNode(x, branch)
+        if gate.nextNode.name == branch.in_main:
+            return x
+
+        return self.outputGates[next_name].nextNode(x, branch)

@@ -1,8 +1,11 @@
 import random
 import copy
+
+from transformers.models.bert.modeling_bert import BertEmbeddings
+
 from utils.BlockNetwork import *
 import torch
-from transformers import BertTokenizer, BertForMaskedLM
+from transformers import BertTokenizer, BertForMaskedLM, BertLayer
 from torch.utils.data import DataLoader, Dataset
 from models import Link
 
@@ -109,7 +112,24 @@ def create_model():
             return tokenizer.convert_ids_to_tokens(indices[0][1:n],)
 
     App = DnnApp('bert-base-uncased', 'bbu', predictor=predictor)
-    return App.instantiate(tokenizer, embLayer, networkLayers, outputBlock, 768, 768, link=Link.Link)
+    return App.instantiate(tokenizer, embLayer, networkLayers, outputBlock, 768, 768, link=Link.Link, forward=forward)
 
 
 
+
+def forward(inputs, layers):
+
+    for layer in layers:
+        if isinstance(layer, BertEmbeddings):
+            inputs['input_ids'] = layer(inputs['input_ids'], token_type_ids=inputs['token_type_ids'])
+            inputs['input_ids'] = torch.squeeze(inputs['input_ids'], dim=1)
+        elif isinstance(layer, BertLayer):
+            inputs['input_ids'] = layer(inputs['input_ids'][0] if isinstance(inputs['input_ids'], tuple) else inputs['input_ids'],
+                                        attention_mask=inputs['attention_mask'])
+        else:
+            if isinstance(inputs, dict):
+                inputs = layer(inputs['input_ids'][0] if isinstance(inputs['input_ids'], tuple) else inputs['input_ids'])
+            else:
+                inputs = layer(inputs)
+
+    return inputs

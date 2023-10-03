@@ -6,9 +6,9 @@ from tqdm import tqdm
 """
     train path
 """
-def train(model, branch, train_loader, loss_fn, optimizer, valid_loader, validator, val_stops=3):
+def train(model, branch, train_loader, loss_fn, optimizer, valid_loader, validator, val_stops=3, num_epochs=2):
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'mps')
     model = model.to(device)
     model.train()
     cpu_device = torch.device('cpu')
@@ -33,11 +33,11 @@ def train(model, branch, train_loader, loss_fn, optimizer, valid_loader, validat
     while flag:
         epoch += 1
         print('epoch', epoch)
-        pbar = tqdm(enumerate(train_loader), total=total_steps)
-        optimizer.param_groups[0]['lr'] /= 2
+        pbar = tqdm(enumerate(train_loader), total=total_steps, disable=True)
+        optimizer.param_groups[0]['lr'] /= 1.25
         for step, batch in pbar:
             if step < last_step: continue
-            inputs = batch[0]
+            inputs = batch[0].to(device)
             label = batch[1]
             outputs = model(inputs, branch)
             # attention_mask = torch.squeeze(batch['attention_mask'], dim=1)
@@ -53,6 +53,7 @@ def train(model, branch, train_loader, loss_fn, optimizer, valid_loader, validat
             loss = torch.tensor(0.0)
             for l, o in zip(label, outputs):
                 o = o.to(cpu_device)
+#                 o = torch.softmax(o, 0)
                 loss += loss_fn(o, l)
 
             loss /= len(batch[1])
@@ -66,17 +67,17 @@ def train(model, branch, train_loader, loss_fn, optimizer, valid_loader, validat
 
             if step in stops:
                 prev_valid_acc = last_valid_acc
-                last_valid_acc = validator(model, valid_loader, train=True)
+                last_valid_acc = validator(model, branch, valid_loader, train=True)
 
                 with open(last_step_file, 'wb') as f:
                     pickle.dump(step, f)
 
                 if max_valid_acc < last_valid_acc:
-                    model.save_fcs()
+                    model.save_links()
                     max_valid_acc = last_valid_acc
 
 
-                if last_valid_acc < prev_valid_acc and epoch >= 3:
+                if last_valid_acc < prev_valid_acc and epoch >= num_epochs:
                     print('stop training... max valid acc:  ', max_valid_acc)
                     flag = False
                     break
@@ -109,25 +110,3 @@ def get_stops(val_stops, total_steps):
         stops.append(stop)
 
     return stops
-
-
-
-# def optimizer(path, branch_name='main', currentNode=None, collected_params=None):
-#     if currentNode is None:
-#         currentNode = path.get_input_node()
-#         collected_params = []
-#
-#     for gate in currentNode.inputGates.keys():
-#         link = currentNode.inputGates[gate]
-#         collected_params.append(link)
-#
-#     outputGates = currentNode.outputGates
-#     for gate in outputGates.keys():
-#         if gate in [self.name, branch_name]:
-#             link = outputGates[gate].link
-#             if link is not None:
-#                 for param in link.parameters():
-#                     param.requires_grad = require
-#
-#             self.link_require_grad(branch_name, require, outputGates[gate].nextNode)
-

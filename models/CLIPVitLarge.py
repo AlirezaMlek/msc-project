@@ -1,10 +1,9 @@
 # Load model directly
 from transformers import AutoProcessor, AutoModel
-from utils.BlockNode import InputType
+from models.Link import Link
 import torch
 from torch import nn
-from utils.BlockNetwork import DnnApp, BlockNetwork
-import cv2
+from utils.BlockNetwork import DnnApp
 
 def create_model():
     processor = AutoProcessor.from_pretrained("openai/clip-vit-large-patch14")
@@ -22,10 +21,10 @@ def create_model():
 
     App = DnnApp('clip-vit-large-patch14', 'cvl', predictor=predictor)
     return App.instantiate(None, embLayer, networkLayers, outputBlock, 1024, 1024,
-                           forward=forward)
+                           forward=forward, link=Link)
 
 
-device = torch.device('mps')
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def forward(x, layers):
     for layer in layers:
@@ -34,27 +33,3 @@ def forward(x, layers):
         x = layer(x[0] if isinstance(x, tuple) else x, attention, attention)
     return x[0] if isinstance(x, tuple) else x
 
-
-
-# processor = AutoProcessor.from_pretrained("openai/clip-vit-large-patch14")
-#
-# model = AutoModel.from_pretrained("openai/clip-vit-large-patch14")
-#
-# img = cv2.imread('/Users/alireza/Desktop/test.jpg')
-# # image = torch.tensor(img)
-#
-# # img = processor.image_processor(img)
-#
-# inputs = processor(images=img, return_tensors="pt")
-#
-# batch_size = inputs.pixel_values.shape[0]
-# attention_mask = torch.ones(1, 1, 257, 257, dtype=torch.long)
-# causal_attn_mask = torch.ones(1, 1, 257, 257, dtype=torch.long)
-#
-#
-# # img = torch.tensor(img['pixel_values'][0]).unsqueeze(0)
-# img = model.vision_model.embeddings(inputs.pixel_values)
-# # attention = torch.ones(1, 1024)
-# l = model.vision_model.encoder.layers[0]
-# img = l(img, attention_mask, causal_attn_mask)
-# print(1)

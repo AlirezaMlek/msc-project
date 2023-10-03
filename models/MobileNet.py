@@ -1,7 +1,4 @@
-import os.path
-
 import numpy as np
-from torchvision import models as cmodels
 from utils.BlockNetwork import DnnApp
 from utils.BlockNode import InputType
 import torch.nn as nn
@@ -12,22 +9,16 @@ import torchvision
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 
-def create_model(load_cfar10=False):
+def create_model():
     classes = ('Airplane', 'Car', 'Bird', 'Cat', 'Deer', 'Dog', 'Frog', 'Horse', 'Ship', 'Truck')
 
     def predictor(scores):
         index = int(np.argmax(scores))
         return classes[index]
 
-    model = cmodels.alexnet(pretrained=True)
+    model = torch.hub.load('pytorch/vision:v0.10.0', 'mobilenet_v2', pretrained=True)
 
-    model.classifier[1] = nn.Linear(9216, 4096)
-    model.classifier[4] = nn.Linear(4096, 1024)
-    model.classifier[6] = nn.Linear(1024, 10)
-
-    if os.path.exists('model.pth') and load_cfar10:
-        model.load_state_dict(torch.load('model.pth'))
-        print('model is loaded')
+    model.classifier[1] = nn.Linear(1280, 10)
 
     for param in model.parameters():
         param.requires_grad = False
@@ -36,7 +27,7 @@ def create_model(load_cfar10=False):
 
     networkLayers = [model.features[0:3], model.features[3:6], model.features[6:8],
                      model.features[8:10], model.features[10:13]]
-    outputBlock = [model.avgpool, nn.Flatten(start_dim=1), model.classifier]
+    outputBlock = [nn.Flatten(start_dim=1), model.classifier]
 
     # calculating size #########
     a = embLayer(torch.randn((1, 3, 224, 224)))
@@ -49,14 +40,7 @@ def create_model(load_cfar10=False):
         sizes.append(list(a.shape))
     ###########################
 
-    if load_cfar10:
-        name = 'alexnet_cfar'
-        short_name = 'alxc'
-    else:
-        name = 'alexnet'
-        short_name = 'alx'
-
-    App = DnnApp(name, short_name, predictor=predictor)
+    App = DnnApp('mobilenet', 'mbn', predictor=predictor)
     return App.instantiate(None, embLayer, networkLayers, outputBlock, sizes, inputType=InputType.D2, forward=forward,
                            link=Link.Link)
 

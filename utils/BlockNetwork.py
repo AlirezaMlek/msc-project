@@ -1,6 +1,3 @@
-import torch
-import torch.nn as nn
-
 from utils.BlockNode import *
 import os
 from models.Link import ConcatLayer
@@ -33,13 +30,11 @@ class BlockNetwork:
         return node
 
 
-
 """
     Each App has some path. a main path and other shared paths.
     * for training it first fetches all the path's nodes (from its own nodes and another path's nodes)
 """
 class Path(nn.Module):
-
     App = {}
 
     def __init__(self, name, app, nodes, link=None, forward_label=None):
@@ -72,54 +67,74 @@ class Path(nn.Module):
         if branch.is_main:
             return data
 
-        out_main_node = self.App[self.app].find_node(self.app, branch.out_main)
+        out_main_node = node
+        while out_main_node.name != branch.out_main:
+            out_main_node = out_main_node.outputGates[self.name].nextNode
 
-        branch_data = out_main_node(data, branch)
+        in_branch_node = out_main_node.outputGates[branch_name].nextNode
+        data_copy = copy_data(data)
+        branch_data = in_branch_node(data_copy, branch)
 
         branch.name = self.name
-        main_data = out_main_node(data, branch)
+        out_main_node_next = out_main_node.outputGates[self.name].nextNode
 
-        in_main_node = self.App[self.app].find_node(self.app, branch.in_main)
+        if branch.is_residual:
+            main_data = out_main_node_next(data, branch)
+
+        in_main_node = out_main_node_next
+        while in_main_node.name != branch.in_main:
+            in_main_node = in_main_node.outputGates[self.name].nextNode
 
         branch.name = branch_name
-        comb_data = {'main': main_data, 'branch': branch_data}
-        data = in_main_node(comb_data, branch)
+        if branch.is_residual:
+            comb_data = {'data1': main_data, 'data2': branch_data}
+            final_data = in_main_node(comb_data, branch)
+        else:
+            final_data = in_main_node(branch_data, branch)
 
-        return data
+        return final_data
 
     """
     update nodes when a path is created
     """
-    def update_nodes(self, name, nodes, is_branch=False):
+    def update_nodes(self, name, nodes, is_branch=False, residual=True):
 
         for i in range(len(nodes) - 1):
             if nodes[i].owner != nodes[0].owner or \
-                    (nodes[i+1].id-1 != nodes[i].id and nodes[i+1].owner == nodes[0].owner):
+                    (nodes[i + 1].id - 1 != nodes[i].id and nodes[i + 1].owner == nodes[0].owner):
 
-                if nodes[i].inputType == InputType.D1:
+                if nodes[i].inputType == InputType.D1 and nodes[i + 1].owner != nodes[0].owner:
+                    #                     nodes[i].block[0].output.LayerNorm = nn.Sequential()
+                    #                     nodes[i].block[0].output.dropout = nn.Sequential()
                     nodes[i].block[0].layer_norm2 = nn.Sequential()
 
-                link = self.link(nodes[i], nodes[i + 1])
+                    add_norm = True
+                else:
+                    add_norm = False
+
+                link = self.link(nodes[i], nodes[i + 1], add_norm)
                 nodes[i].add_output_gate(name, nodes[i + 1], link)
 
-            elif not is_branch or (nodes[i].owner == nodes[0].owner and nodes[i+1].owner != nodes[0].owner):
+            elif not is_branch or (nodes[i].owner == nodes[0].owner and nodes[i + 1].owner != nodes[0].owner):
                 link = None
                 nodes[i].add_output_gate(name, nodes[i + 1], link)
 
-
-            if nodes[i].owner == nodes[0].owner and nodes[i-1].owner != nodes[0].owner:
+            if nodes[i].owner == nodes[0].owner and nodes[i - 1].owner != nodes[0].owner:
                 link = ConcatLayer(nodes[i])
                 nodes[i].add_input_gate(name, link)
 
-            elif nodes[i].owner != nodes[0].owner and nodes[i-1].owner == nodes[0].owner:
-                link = self.link(nodes[i-1], nodes[i])
+            elif nodes[i].owner != nodes[0].owner and nodes[i - 1].owner == nodes[0].owner:
+                link = self.link(nodes[i - 1], nodes[i])
                 nodes[i].add_input_gate(name, link)
+
+        if nodes[-1].owner == nodes[0].owner and nodes[-2].owner != nodes[0].owner and residual:
+            link = ConcatLayer(nodes[-1])
+            nodes[-1].add_input_gate(name, link)
 
         self.App[self.app].update_nodes(nodes[0], self.name)
 
-
     def save_links(self, currentNode=None):
-        if currentNode in None:
+        if currentNode is None:
             currentNode = self.inputNode
 
         for gate in currentNode.inputGates.keys():
@@ -137,11 +152,9 @@ class Path(nn.Module):
 
                 self.save_links(outputGates[gate].nextNode)
 
-
     def load_links(self):
         currentNode = self.inputNode
         while currentNode.outputGates.keys().__contains__(self.name):
-
             outputGates = currentNode.outputGates
             for gate in outputGates:
                 if gate.__contains__(self.name):
@@ -155,12 +168,7 @@ class Path(nn.Module):
 
         self.App[self.app].update_nodes(find_root(currentNode), self.name)
 
-
-
-    def new_branch(self, App, out_main, in_host, out_host, in_main):
-
-        # if out_main > self.num_nodes or in_main > self.num_nodes:
-        #     raise AssertionError(f'input indices must be less than {self.num_nodes + 1}')
+    def new_branch(self, App, out_main, in_host, out_host, in_main, residual=True):
 
         inputNode1 = self.inputNode
         inputNode2 = App.get_input_node()
@@ -168,16 +176,15 @@ class Path(nn.Module):
                                                   self.name)
 
         out_main_name = nodes[out_main].name
-        in_host_name = nodes[out_main+1].name
+        in_host_name = nodes[out_main + 1].name
         out_host_name = nodes[out_main + out_host - in_host + 1].name
         in_main_name = nodes[out_main + out_host - in_host + 2].name
 
         branchName = self.name + '-b' + str(len(self.branches))
-        self.update_nodes(branchName, nodes, is_branch=True)
+        self.update_nodes(branchName, nodes, is_branch=True, residual=residual)
 
         self.branches[branchName] = Branch(branchName, self.name, App, out_main_name, in_main_name, in_host_name,
-                                           out_host_name, False)
-
+                                           out_host_name, False, residual)
 
     def link_require_grad(self, branch_name='main', require=True, currentNode=None):
 
@@ -201,7 +208,6 @@ class Path(nn.Module):
 
 
 class DnnApp:
-
     network = None
 
     def __init__(self, name, tag, description=None, predictor=None):
@@ -225,11 +231,8 @@ class DnnApp:
                 self.network.update_input_node(rootNode.owner, rootNode)
                 break
 
-
-
     def get_input_node(self):
         return self.network.get_input_node(self.name)
-
 
     def instantiate(self, tokenizer, embBlock, networkLayers, outputBlock, inputSize, outputSize=None,
                     inputType=InputType.D1, forward=None, link=None):
@@ -249,21 +252,20 @@ class DnnApp:
 
             if isinstance(inputSize, list):
                 inSize = inputSize[i]
-                outSize = inputSize[i+1]
+                outSize = inputSize[i + 1]
             else:
                 inSize = inputSize
                 outSize = outputSize
 
-            node = Node('{}:{}'.format(self.tag, i+1), i+1, self.name, block, inSize, outSize,
+            node = Node('{}:{}'.format(self.tag, i + 1), i + 1, self.name, block, inSize, outSize,
                         BlockType.Network, inputType=inputType, forward=forward)
             nodeList.append(node)
-
 
         if isinstance(inputSize, list):
             inSize = inputSize[-1]
         else:
             inSize = inputSize
-        outputNode = Node('{}:output'.format(self.tag), numEncoders+1, self.name, outputBlock, inSize,
+        outputNode = Node('{}:output'.format(self.tag), numEncoders + 1, self.name, outputBlock, inSize,
                           None, BlockType.Output, inputType=inputType, forward=forward)
         nodeList.append(outputNode)
 
@@ -274,13 +276,11 @@ class DnnApp:
 
         return mainPath, self
 
-
     def predict(self, scores):
         return self.predictor(scores)
 
     def find_node(self, app, name):
         return self.network.find_node(app, name)
-
 
     def set_device(self, device):
         main_path = self.paths[0]
