@@ -35,7 +35,11 @@ Classes:
 * App2 -> german-sentiment-bert: BERT model. sentiment analysis of the german sentences. 
 (https://huggingface.co/oliverguhr/german-sentiment-bert)
 
+* App3 -> alex-net: CNN model. trained for different applications (cfar-10, food-101, image-net)
 
+* App4 -> mobile-net: CNN model. classification (image-net)
+
+* App5 -> CLIP: BERT based model for multimodal applications. image and text multimodal model
 
 ## How to create and train a new path:
 
@@ -50,5 +54,5 @@ Now the path has inserted fc-layers in the input and output nodes of the branche
 
 ## How to test the code:
 
-some tests are available in the test folder.
+some tests are available in the test folder. (not updated)
 
